@@ -11,7 +11,7 @@ import SourceryRuntime
 import SourceryJS
 import SourcerySwift
 import TryCatch
-import xcproj
+import XcodeProj
 
 class Sourcery {
     public static let version: String = SourceryVersion.current.value
@@ -382,7 +382,8 @@ extension Sourcery {
                 try self.output(result: result, to: outputPath)
 
                 if let linkTo = output.linkTo {
-                    link(outputPath, to: linkTo)
+                    guard let target = linkTo.project.target(named: linkTo.target) else { return }
+                    link(outputPath, to: linkTo, target: target.name)
                 }
             }
         } else {
@@ -392,7 +393,8 @@ extension Sourcery {
             try self.output(result: result, to: output.path)
 
             if let linkTo = output.linkTo {
-                link(output.path, to: linkTo)
+                guard let target = linkTo.project.target(named: linkTo.target) else { return }
+                link(output.path, to: linkTo, target: target.name)
             }
         }
 
@@ -400,36 +402,32 @@ extension Sourcery {
             try self.output(result: contents.joined(separator: "\n"), to: path)
 
             if let linkTo = output.linkTo {
-                link(path, to: linkTo)
+                guard let target = linkTo.project.target(named: linkTo.target) else { return }
+                link(output.path, to: linkTo, target: target.name)
             }
         }
 
         if let linkTo = output.linkTo {
-            try linkTo.project.writePBXProj(path: linkTo.projectPath)
+            try linkTo.project.writePBXProj(path: linkTo.projectPath, outputSettings: .init())
         }
 
         Log.benchmark("\tGeneration took \(currentTimestamp() - generationStart)")
         Log.info("Finished.")
     }
 
-    private func link(_ output: Path, to linkTo: Output.LinkTo) {
-        guard let target = linkTo.project.target(named: linkTo.target) else { return }
+    private func link(_ output: Path, to linkTo: Output.LinkTo, target targetName: String) {
+        guard let target = linkTo.project.target(named: targetName) else {
+            Log.warning("Unable to find target \(targetName)")
+            return
+        }
 
         let sourceRoot = linkTo.projectPath.parent()
-        let fileGroup: PBXGroup
-        if let group = linkTo.group {
-            do {
-                let addedGroup = linkTo.project.addGroup(named: group, to: linkTo.project.rootGroup, options: [])
-                fileGroup = addedGroup.object
-                if let groupPath = linkTo.project.fullPath(fileElement: addedGroup, sourceRoot: sourceRoot) {
-                    try groupPath.mkpath()
-                }
-            } catch {
-                Log.warning("Failed to create a folder for group '\(fileGroup.name ?? "")'. \(error)")
-            }
-        } else {
-            fileGroup = linkTo.project.rootGroup
+
+        guard let fileGroup = linkTo.project.createGroupIfNeeded(named: linkTo.group, sourceRoot: sourceRoot) else {
+            Log.warning("Unable to create group \(String(describing: linkTo.group))")
+            return
         }
+
         do {
             try linkTo.project.addSourceFile(at: output, toGroup: fileGroup, target: target, sourceRoot: sourceRoot)
         } catch {
